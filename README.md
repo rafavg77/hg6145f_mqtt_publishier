@@ -83,13 +83,13 @@ Each sensor includes:
 The sensors will automatically appear in Home Assistant under the "Router Device" group. No manual configuration is required in Home Assistant, as the script uses MQTT discovery.
 
 ## Docker Compose
-You can also deploy using Docker Compose:
+You can deploy using Docker Compose. Create a `docker-compose.yml` file with the following content:
 
 ```yaml
 version: '3.8'
 services:
   router-mqtt-publisher:
-    image: router-mqtt-publisher:latest
+    image: rafavg77/router-mqtt-publisher:latest
     environment:
       - ROUTER_IP=${ROUTER_IP}
       - ROUTER_USERNAME=${ROUTER_USERNAME}
@@ -99,6 +99,11 @@ services:
       - MQTT_USERNAME=${MQTT_USERNAME}
       - MQTT_PASSWORD=${MQTT_PASSWORD}
     restart: unless-stopped
+```
+
+Then run:
+```bash
+docker-compose up -d
 ```
 
 ## Contributing
