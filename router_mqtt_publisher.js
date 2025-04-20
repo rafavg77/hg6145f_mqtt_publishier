@@ -69,6 +69,11 @@ const fetchJson = async (page, url) => {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Add byte conversion utility
+const bytesToGigabytes = (bytes) => {
+    return (bytes / (1024 * 1024 * 1024)).toFixed(2);
+};
+
 // Modify publish function to use correct Home Assistant discovery topics
 const publishSensorsToMQTT = (data) => {
     return new Promise((resolve, reject) => {
@@ -87,8 +92,8 @@ const publishSensorsToMQTT = (data) => {
 
         function publishData() {
             const filteredData = {
-                ponBytesSent: data.ponBytesSent,
-                ponBytesReceived: data.ponBytesReceived,
+                ponBytesSent: bytesToGigabytes(data.ponBytesSent),
+                ponBytesReceived: bytesToGigabytes(data.ponBytesReceived),
             };
 
             Object.entries(filteredData).forEach(([key, value]) => {
@@ -103,7 +108,8 @@ const publishSensorsToMQTT = (data) => {
                     state_topic: sensorStateTopic,
                     unique_id: `${deviceId}_${entityId}`,
                     device_class: 'data_size',
-                    unit_of_measurement: 'bytes',
+                    unit_of_measurement: 'GB',
+                    state_class: 'total',
                     icon: 'mdi:server-network',
                     value_template: `{{ value_json.${key} }}`,
                     device: {
