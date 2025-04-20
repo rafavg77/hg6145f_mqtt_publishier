@@ -6,12 +6,13 @@ import 'dotenv/config';
 //process.setMaxListeners(0); // Set to 0 for unlimited listeners
 
 // MQTT Configuration
-const mqttHost = process.env.MQTT_HOST || 'mqtt://localhost';
-const mqttPort = process.env.MQTT_PORT || 1883;
-const mqttUsername = process.env.MQTT_USERNAME || '';
-const mqttPassword = process.env.MQTT_PASSWORD || '';
-const mqttTopicBaseInfo = process.env.MQTT_TOPIC_CONFIG_PREFIX || 'homeassistant/sensor/routerBaseInfo';
-const mqttClientId = process.env.MQTT_CLIENT_ID || `publish-${Math.floor(Math.random() * 1000)}`;
+const mqttHost = process.env.MQTT_HOST;
+const mqttPort = process.env.MQTT_PORT;
+const mqttUsername = process.env.MQTT_USERNAME;
+const mqttPassword = process.env.MQTT_PASSWORD;
+const mqttTopicBaseInfo = process.env.MQTT_TOPIC_CONFIG_PREFIX;
+const mqttTopicDataPrefix = process.env.MQTT_TOPIC_DATA_PREFIX;
+const mqttClientId = 'publish-fiber-home-router';
 
 // Define constants for router environment variables
 const routerIp = process.env.ROUTER_IP;
@@ -27,7 +28,12 @@ const client = mqtt.connect({
     clientId: mqttClientId,
 });
 
+// Add connection tracking
+let isConnected = false;
+let pendingMessages = 0;
+
 client.on('connect', () => {
+    isConnected = true;
     console.log('Connected to MQTT broker');
 });
 
@@ -35,48 +41,111 @@ client.on('error', (err) => {
     console.error('MQTT connection error:', err);
 });
 
+// Add message tracking
+const trackMessage = () => {
+    pendingMessages++;
+};
+
+const untrackMessage = () => {
+    pendingMessages--;
+    if (pendingMessages === 0) {
+        console.log('All messages published successfully');
+        // Only exit after all messages are published
+        client.end(true, () => {
+            process.exit(0);
+        });
+    }
+};
+
 const fetchJson = async (page, url) => {
     const response = await page.goto(url);
     return response.json();
 };
 
-// Modify the publishSensorsToMQTT function to include the unit of measurement and icon for ponBytesSent and ponBytesReceived
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Modify publish function to use correct Home Assistant discovery topics
 const publishSensorsToMQTT = (data) => {
-    Object.entries(data).forEach(([key, value]) => {
-        const sensorConfigTopic = `${mqttTopicBaseInfo}/${key}/config`;
-        const sensorStateTopic = `${mqttTopicBaseInfo}/${key}/state`;
-
-        const sensorConfig = {
-            name: `Router ${key}`,
-            state_topic: sensorStateTopic,
-            unique_id: `router_${key}`,
-            device: {
-                identifiers: ['router_device'],
-                name: 'Router Device',
-                model: 'HG6145F',
-                manufacturer: 'FiberHome',
-            },
-        };
-
-        // Interpret ponBytesSent and ponBytesReceived as bytes and add unit and icon
-        if (key === 'ponBytesSent' || key === 'ponBytesReceived') {
-            value = `${value} bytes`;
-            sensorConfig.unit_of_measurement = 'bytes';
-            sensorConfig.icon = 'mdi:server-network';
+    return new Promise((resolve, reject) => {
+        if (!isConnected) {
+            console.log('Waiting for MQTT connection...');
+            setTimeout(() => {
+                if (!isConnected) {
+                    reject(new Error('MQTT connection timeout'));
+                    return;
+                }
+                publishData();
+            }, 5000);
+        } else {
+            publishData();
         }
 
-        // Publish sensor configuration for Home Assistant discovery
-        client.publish(sensorConfigTopic, JSON.stringify(sensorConfig), { retain: true });
+        function publishData() {
+            const filteredData = {
+                ponBytesSent: data.ponBytesSent,
+                ponBytesReceived: data.ponBytesReceived,
+            };
 
-        // Publish sensor state
-        client.publish(sensorStateTopic, String(value), { retain: true });
+            Object.entries(filteredData).forEach(([key, value]) => {
+                // Use consistent topic structure for Home Assistant discovery
+                const deviceId = 'router_hg6145f';
+                const entityId = key.toLowerCase();
+                const sensorConfigTopic = `homeassistant/sensor/${deviceId}/${entityId}/config`;
+                const sensorStateTopic = `homeassistant/sensor/${deviceId}/${entityId}/state`;
+
+                const sensorConfig = {
+                    name: `Router ${key}`,
+                    state_topic: sensorStateTopic,
+                    unique_id: `${deviceId}_${entityId}`,
+                    device_class: 'data_size',
+                    unit_of_measurement: 'bytes',
+                    icon: 'mdi:server-network',
+                    value_template: `{{ value_json.${key} }}`,
+                    device: {
+                        identifiers: [deviceId],
+                        name: 'Router Device',
+                        model: 'HG6145F',
+                        manufacturer: 'FiberHome',
+                    },
+                };
+
+                // Track and publish configuration
+                trackMessage();
+                console.log(`Publishing to ${sensorConfigTopic}:`, JSON.stringify(sensorConfig));
+                client.publish(sensorConfigTopic, JSON.stringify(sensorConfig), { retain: true, qos: 1 }, (err) => {
+                    if (err) {
+                        console.error(`Failed to publish config for ${key}:`, err);
+                        reject(err);
+                    } else {
+                        console.log(`Config published for ${key} to ${sensorConfigTopic}`);
+                        untrackMessage();
+                    }
+                });
+
+                // Track and publish state with JSON format
+                trackMessage();
+                const stateData = { [key]: value };
+                console.log(`Publishing to ${sensorStateTopic}:`, JSON.stringify(stateData));
+                client.publish(sensorStateTopic, JSON.stringify(stateData), { retain: true, qos: 1 }, (err) => {
+                    if (err) {
+                        console.error(`Failed to publish state for ${key}:`, err);
+                        reject(err);
+                    } else {
+                        console.log(`State published for ${key} to ${sensorStateTopic}`);
+                        untrackMessage();
+                    }
+                });
+            });
+            resolve();
+        }
     });
-    console.log('Sensors published to MQTT for Home Assistant discovery');
 };
 
 // Update the function to include sensor publishing
 const performRouterOperationsAndPublish = async () => {
-    const browser = await puppeteer.launch();
+    const browser = await puppeteer.launch({
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
     const page = await browser.newPage();
     await page.goto(`http://${routerIp}`);
     await page.waitForNavigation();
@@ -92,6 +161,9 @@ const performRouterOperationsAndPublish = async () => {
     // Fetch base info
     const baseInfoUrl = `http://${routerIp}/cgi-bin/ajax?ajaxmethod=get_base_info&_=0.04439007026162467`;
     const jsonResponse = await fetchJson(page, baseInfoUrl);
+
+    // Print the base info response to the console
+    console.log('Base Info Response:', jsonResponse);
 
     // Fetch session ID
     const sessionIdUrl = `http://${routerIp}/cgi-bin/ajax?ajaxmethod=get_refresh_sessionid&_=0.9346017593427624`;
@@ -113,20 +185,17 @@ const performRouterOperationsAndPublish = async () => {
     await browser.close();
 
     // Publish base info to MQTT as sensors
-    publishSensorsToMQTT(jsonResponse);
-
     return jsonResponse;
 };
 
-// Execute the router operations and publish once
+// Update main execution to handle MQTT properly
 (async () => {
     try {
-        await performRouterOperationsAndPublish();
+        const data = await performRouterOperationsAndPublish();
+        await publishSensorsToMQTT(data);
         console.log('Execution completed successfully.');
     } catch (err) {
         console.error('Error during execution:', err);
-    } finally {
-        process.exit(0); // Ensure the script terminates
+        process.exit(1);
     }
 })();
-
