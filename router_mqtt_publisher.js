@@ -144,7 +144,8 @@ const publishSensorsToMQTT = (data) => {
 // Update the function to include sensor publishing
 const performRouterOperationsAndPublish = async () => {
     const browser = await puppeteer.launch({
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        executablePath: '/usr/bin/chromium-browser'  // Use system Chromium
     });
     const page = await browser.newPage();
     await page.goto(`http://${routerIp}`);

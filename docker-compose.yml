@@ -2,10 +2,7 @@ version: '3.8'
 
 services:
   router-mqtt-publisher:
-    image: router-mqtt-publisher:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: rafavg77/router-mqtt-publisher:latest
     environment:
       - ROUTER_IP=${ROUTER_IP}
       - ROUTER_USERNAME=${ROUTER_USERNAME}
@@ -15,5 +12,5 @@ services:
       - MQTT_USERNAME=${MQTT_USERNAME}
       - MQTT_PASSWORD=${MQTT_PASSWORD}
       - MQTT_TOPIC_CONFIG_PREFIX=${MQTT_TOPIC_CONFIG_PREFIX}
-      - MQTT_CLIENT_ID=${MQTT_CLIENT_ID}
+      - MQTT_TOPIC_DATA_PREFIX=${MQTT_TOPIC_DATA_PREFIX}
     restart: unless-stopped
