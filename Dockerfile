@@ -3,10 +3,7 @@
 # Use the official Node.js image as the base image
 FROM node:16-alpine
 
-# Set the working directory in the container
-WORKDIR /app
-
-# Install Chromium dependencies
+# Install required packages including dcron
 RUN apk add --no-cache \
     chromium \
     nss \
@@ -16,10 +13,11 @@ RUN apk add --no-cache \
     ca-certificates \
     ttf-freefont \
     nodejs \
-    yarn
+    yarn \
+    dcron
 
-# Set Puppeteer to use the installed Chromium
-ENV PUPPETEER_EXECUTABLE_PATH="/usr/bin/chromium-browser"
+# Set the working directory in the container
+WORKDIR /app
 
 # Copy package.json and package-lock.json to the container
 COPY package.json package-lock.json ./
@@ -30,8 +28,11 @@ RUN npm install
 # Copy the rest of the application code to the container
 COPY . .
 
-# Expose the port (if needed for MQTT or other services)
-# EXPOSE 1883
+# Add crontab file in the cron directory
+RUN echo "*/5 * * * * cd /app && /usr/local/bin/node router_mqtt_publisher.js >> /var/log/cron.log 2>&1" > /etc/crontabs/root
 
-# Command to run the script
-CMD ["node", "router_mqtt_publisher.js"]
+# Create the log file to be able to run tail
+RUN touch /var/log/cron.log
+
+# Run crond in the foreground
+CMD crond -f -l 2 && tail -f /var/log/cron.log

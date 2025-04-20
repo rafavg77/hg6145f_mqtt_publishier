@@ -99,7 +99,11 @@ services:
       - MQTT_USERNAME=${MQTT_USERNAME}
       - MQTT_PASSWORD=${MQTT_PASSWORD}
     restart: unless-stopped
+    volumes:
+      - /var/log/router-mqtt:/var/log
 ```
+
+The container is configured to automatically run the script every 5 minutes using cron. Logs are available in the `/var/log/cron.log` file inside the container, and they are persisted to the host machine at `/var/log/router-mqtt/cron.log`.
 
 Then run:
 ```bash
