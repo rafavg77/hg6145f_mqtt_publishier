@@ -2,6 +2,12 @@ import puppeteer from 'puppeteer';
 import mqtt from 'mqtt';
 import 'dotenv/config';
 
+// Add logging utility
+const log = (message, type = 'INFO') => {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] [${type}] ${message}`);
+};
+
 // Increase the maximum number of listeners to avoid memory leak warnings
 //process.setMaxListeners(0); // Set to 0 for unlimited listeners
 
@@ -19,6 +25,9 @@ const routerIp = process.env.ROUTER_IP;
 const routerUsername = process.env.ROUTER_USERNAME;
 const routerPassword = process.env.ROUTER_PASSWORD;
 
+// Add execution interval from env
+const executionInterval = parseInt(process.env.EXECUTION_INTERVAL, 10) || 30;
+
 // Connect to MQTT broker with authentication
 const client = mqtt.connect({
     host: mqttHost,
@@ -34,11 +43,11 @@ let pendingMessages = 0;
 
 client.on('connect', () => {
     isConnected = true;
-    console.log('Connected to MQTT broker');
+    log('Connected to MQTT broker');
 });
 
 client.on('error', (err) => {
-    console.error('MQTT connection error:', err);
+    log(`MQTT connection error: ${err}`, 'ERROR');
 });
 
 // Add message tracking
@@ -49,11 +58,7 @@ const trackMessage = () => {
 const untrackMessage = () => {
     pendingMessages--;
     if (pendingMessages === 0) {
-        console.log('All messages published successfully');
-        // Only exit after all messages are published
-        client.end(true, () => {
-            process.exit(0);
-        });
+        log('All messages published successfully');
     }
 };
 
@@ -68,7 +73,7 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const publishSensorsToMQTT = (data) => {
     return new Promise((resolve, reject) => {
         if (!isConnected) {
-            console.log('Waiting for MQTT connection...');
+            log('Waiting for MQTT connection...');
             setTimeout(() => {
                 if (!isConnected) {
                     reject(new Error('MQTT connection timeout'));
@@ -111,13 +116,13 @@ const publishSensorsToMQTT = (data) => {
 
                 // Track and publish configuration
                 trackMessage();
-                console.log(`Publishing to ${sensorConfigTopic}:`, JSON.stringify(sensorConfig));
+                log(`Publishing to ${sensorConfigTopic}: ${JSON.stringify(sensorConfig)}`);
                 client.publish(sensorConfigTopic, JSON.stringify(sensorConfig), { retain: true, qos: 1 }, (err) => {
                     if (err) {
-                        console.error(`Failed to publish config for ${key}:`, err);
+                        log(`Failed to publish config for ${key}: ${err}`, 'ERROR');
                         reject(err);
                     } else {
-                        console.log(`Config published for ${key} to ${sensorConfigTopic}`);
+                        log(`Config published for ${key} to ${sensorConfigTopic}`);
                         untrackMessage();
                     }
                 });
@@ -125,13 +130,13 @@ const publishSensorsToMQTT = (data) => {
                 // Track and publish state with JSON format
                 trackMessage();
                 const stateData = { [key]: value };
-                console.log(`Publishing to ${sensorStateTopic}:`, JSON.stringify(stateData));
+                log(`Publishing to ${sensorStateTopic}: ${JSON.stringify(stateData)}`);
                 client.publish(sensorStateTopic, JSON.stringify(stateData), { retain: true, qos: 1 }, (err) => {
                     if (err) {
-                        console.error(`Failed to publish state for ${key}:`, err);
+                        log(`Failed to publish state for ${key}: ${err}`, 'ERROR');
                         reject(err);
                     } else {
-                        console.log(`State published for ${key} to ${sensorStateTopic}`);
+                        log(`State published for ${key} to ${sensorStateTopic}`);
                         untrackMessage();
                     }
                 });
@@ -143,6 +148,7 @@ const publishSensorsToMQTT = (data) => {
 
 // Update the function to include sensor publishing
 const performRouterOperationsAndPublish = async () => {
+    log('Initializing browser...');
     const browser = await puppeteer.launch({
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
         executablePath: '/usr/bin/chromium-browser'  // Use system Chromium
@@ -153,25 +159,24 @@ const performRouterOperationsAndPublish = async () => {
 
     page.on('dialog', async dialog => await dialog.accept());
 
-    // Sign in
+    log('Logging into router...');
     await page.type('#user_name', routerUsername);
     await page.type('#loginpp', routerPassword);
     await page.click('#login_btn');
     await page.waitForNavigation();
 
-    // Fetch base info
+    log('Fetching router information...');
     const baseInfoUrl = `http://${routerIp}/cgi-bin/ajax?ajaxmethod=get_base_info&_=0.04439007026162467`;
     const jsonResponse = await fetchJson(page, baseInfoUrl);
+    log('Router information received:', 'DEBUG');
+    log(JSON.stringify(jsonResponse), 'DEBUG');
 
-    // Print the base info response to the console
-    console.log('Base Info Response:', jsonResponse);
-
-    // Fetch session ID
+    log('Fetching session ID...');
     const sessionIdUrl = `http://${routerIp}/cgi-bin/ajax?ajaxmethod=get_refresh_sessionid&_=0.9346017593427624`;
     const sessionJson = await fetchJson(page, sessionIdUrl);
     const sessionId = sessionJson.sessionid;
 
-    // Perform logout
+    log('Performing logout...');
     const logoutResponse = await page.evaluate(async (sessionId) => {
         const response = await fetch('/cgi-bin/ajax', {
             method: 'POST',
@@ -181,22 +186,30 @@ const performRouterOperationsAndPublish = async () => {
         return response.ok;
     }, sessionId);
 
-    console.log(logoutResponse ? 'Logout realizado correctamente.' : 'Error al realizar el logout.');
-
+    log(logoutResponse ? 'Logout successful' : 'Error during logout', logoutResponse ? 'INFO' : 'ERROR');
     await browser.close();
+    log('Browser closed');
 
     // Publish base info to MQTT as sensors
     return jsonResponse;
 };
 
-// Update main execution to handle MQTT properly
-(async () => {
+// Modify the main execution to run periodically
+const runPeriodically = async () => {
     try {
-        const data = await performRouterOperationsAndPublish();
-        await publishSensorsToMQTT(data);
-        console.log('Execution completed successfully.');
+        log(`Starting execution with ${executionInterval} seconds interval`);
+        while (true) {
+            log('Starting new execution cycle...');
+            const data = await performRouterOperationsAndPublish();
+            await publishSensorsToMQTT(data);
+            log('Execution completed successfully, waiting for next cycle...');
+            await delay(executionInterval * 1000); // Convert seconds to milliseconds
+        }
     } catch (err) {
-        console.error('Error during execution:', err);
+        log(`Error during execution: ${err}`, 'ERROR');
         process.exit(1);
     }
-})();
+};
+
+// Start periodic execution
+runPeriodically();
